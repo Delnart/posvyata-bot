@@ -1,0 +1,72 @@
+# 😈 Посвята ФІОТ 2026 — Telegram Bot
+
+Офіційний Telegram-бот реєстрації учасників на захід **Посвята ФІОТ 2026** (КПІ ім. Ігоря Сікорського).
+
+## 🚀 Основні можливості
+
+- **Покрокова реєстрація учасників:**
+  - Введення ПІБ та контактних даних (Telegram username).
+  - Вибір факультету: **ФІОТ** або **Інший факультет**.
+  - Введення академічної групи з валідацією формату.
+  - Ознайомлення та погодження з правилами заходу.
+- **Підтримка благодійного збору:**
+  - Нагадування про збір на банку Monobank на старті реєстрації, в профілі користувача та після успішного підтвердження.
+  - Інлайн-кнопки переходу на банку Monobank.
+- **Особистий профіль:**
+  - Перегляд збережених реєстраційних даних.
+  - Зручне інтерактивне меню редагування будь-якого поля (ПІБ, нікнейм, університет, факультет, група).
+- **Розділ «Часті питання» (FAQ):**
+  - Динамічне підвантаження запитань і відповідей з CSV-файлу.
+  - Інформація про локацію заходу, дату, час та благодійний збір.
+- **Панель адміністратора:**
+  - Відкриття / закриття реєстрації в реальному часі.
+  - Масова розсилка повідомлень усім зареєстрованим учасникам.
+  - Швидкий доступ до Google Таблиці з базою учасників.
+- **Інтеграція з Google Sheets:**
+  - Автоматичне додавання нових реєстрацій в режимі реального часу.
+  - Синхронізація оновлень профілю в таблицю.
+
+## 🛠 Технологічний стек
+
+- **Мова:** Python 3.12+
+- **Фреймворк:** [aiogram 3.x](https://docs.aiogram.dev/) (FSM, Routers, Inline Keyboards)
+- **База даних:** PostgreSQL (Neon Serverless) через [SQLAlchemy 2.0](https://www.sqlalchemy.org/) + `asyncpg`
+- **Таблиці:** [gspread](https://docs.gspread.org/) + Google Service Account
+- **Веб-сервер:** `aiohttp` (healthcheck ендпоінт для Render / UptimeRobot)
+- **Деплоймент:** Docker, Docker Compose, Render.com (Blueprint `render.yaml`)
+
+## ⚙️ Налаштування та запуск
+
+### 1. Клонування репозиторію
+```bash
+git clone https://github.com/Delnart/posvyata-bot.git
+cd posvyata-bot
+```
+
+### 2. Встановлення залежностей
+```bash
+python -m venv .venv
+source .venv/bin/activate  # на Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 3. Змінні оточення (.env)
+Створіть файл `.env` на основі `.env.example`:
+```env
+BOT_TOKEN=YOUR_BOT_TOKEN
+BD_ENGINE=postgresql+asyncpg://user:password@host/dbname?ssl=require
+SUPER_ADMINS=123456789,987654321
+LOG_SHEET_NAME=Посвята ФІОТ 2026
+SHEET_URL=https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID
+GOOGLE_CREDENTIALS_JSON=
+```
+
+### 4. Запуск бота
+```bash
+python main.py
+```
+
+### 5. Запуск через Docker Compose (локально)
+```bash
+docker compose up --build -d
+```
