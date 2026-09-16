@@ -1,3 +1,4 @@
+import asyncio
 from dotenv import load_dotenv
 
 from aiogram import F
@@ -51,8 +52,10 @@ async def safe_reply(message: types.Message, text: str, reply_markup=None):
 
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
-    is_user_admin = await is_admin(message.from_user.id)
-    existing_user = await get_user(message.from_user.id)
+    is_user_admin, existing_user = await asyncio.gather(
+        is_admin(message.from_user.id),
+        get_user(message.from_user.id)
+    )
 
     if is_user_admin:
         keyboard = kb.create_main_admin_keyboard()
@@ -86,8 +89,10 @@ async def cmd_back_hub(callback: types.CallbackQuery, state: FSMContext):
         pass
     await state.clear()
 
-    is_user_admin = await is_admin(callback.from_user.id)
-    existing_user = await get_user(callback.from_user.id)
+    is_user_admin, existing_user = await asyncio.gather(
+        is_admin(callback.from_user.id),
+        get_user(callback.from_user.id)
+    )
 
     if is_user_admin:
         keyboard = kb.create_main_admin_keyboard()
