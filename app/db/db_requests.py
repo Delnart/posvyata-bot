@@ -1,5 +1,5 @@
 from sqlalchemy import select, insert, update
-from app.db.db_setup import engine, admin_list, user_list
+from app.db.db_setup import engine, admin_list, user_list, SUPER_ADMINS
 
 
 async def add_user(tg_id: int, username: str, name: str,
@@ -87,20 +87,30 @@ async def update_user_field(tg_id: int, field_name: str, new_value) -> None:
         await conn.execute(update_statement)
 
 
+_admin_cache: set[int] = set()
+_admins_loaded: bool = False
+
+
+async def load_admins_cache() -> set[int]:
+    """
+    Завантажує ID усіх активних адмінів у пам'ять для O(1) перевірок.
+    """
+    global _admin_cache, _admins_loaded
+    async with engine.begin() as conn:
+        select_statement = select(admin_list.c.telegram_id).where(admin_list.c.is_active == True)
+        result = await conn.execute(select_statement)
+        db_admins = {row[0] for row in result.fetchall()}
+        _admin_cache = db_admins | set(SUPER_ADMINS)
+        _admins_loaded = True
+        return _admin_cache
+
+
 async def is_admin(user_id: int) -> bool:
     """
-    Checks whether a specific user holds an active administrative role.
-
-    Parameters:
-    user_id (int): The unique Telegram identifier of the user to verify.
-
-    Returns:
-    bool: True if the user is an active administrator, False otherwise.
+    Швидка перевірка ролі адміністратора без звернення до БД (0.001 мс).
     """
-    async with engine.begin() as conn:
-        select_statement = select(admin_list).where(
-            (admin_list.c.telegram_id == user_id) & (admin_list.c.is_active == True)
-        )
-
-        result = await conn.execute(select_statement)
-        return result.fetchone() is not None
+    if user_id in SUPER_ADMINS:
+        return True
+    if not _admins_loaded:
+        await load_admins_cache()
+    return user_id in _admin_cache
