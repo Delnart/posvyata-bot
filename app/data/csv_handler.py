@@ -3,8 +3,10 @@ from typing import List, Dict, Any, Optional
 
 class CSVHandler:
     def __init__(self, file_path="app/data/faq_data.csv"):
-        self.path=file_path
+        self.path = file_path
         self._content: List[Dict[int, Any]] = [] # [key: id -> question,answer]
+        self._lookup: Dict[int, str] = {}
+        self.load_data()
         
     def load_data(self) -> bool:
         try:
@@ -12,26 +14,27 @@ class CSVHandler:
                 reader = csv.DictReader(file, skipinitialspace=True)
 
                 new_content = []
+                new_lookup = {}
                 for row in reader:
                     row['id'] = int(row['id'])
                     new_content.append(row)
+                    new_lookup[row['id']] = row['answer']
 
             self._content = new_content
+            self._lookup = new_lookup
             return True
         except (FileNotFoundError, ValueError, KeyError) as e:
             return False
       
-    def get_questions(self):
-        self.load_data()
+    def get_questions(self, force_reload: bool = False):
+        if not self._content or force_reload:
+            self.load_data()
         return self._content
       
     def get_answer_by_id(self, q_id: int) -> Optional[str]:
-        if not self._content:
+        if not self._lookup:
             self.load_data()
-        for item in self._content:
-            if item.get('id') == q_id:
-                return item.get('answer')
-        return None
+        return self._lookup.get(q_id)
 
     def add_questions(self, question:str, answer:str) -> bool:
 
