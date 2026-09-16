@@ -15,7 +15,16 @@ from dotenv import load_dotenv
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
+if sys.platform != "win32":
+    try:
+        import uvloop
+        uvloop.install()
+        print("⚡ uvloop активовано для максимальної швидкодії")
+    except ImportError:
+        pass
+
 from app.routers.controller_router import router as controller_router
+from app.db.db_requests import load_admins_cache
 
 
 async def init_db_with_retry(retries: int = 5, delay: float = 3.0):
@@ -68,11 +77,20 @@ async def main():
     print("Ініціалізація БД...")
     await init_db_with_retry()
 
+    try:
+        await load_admins_cache()
+        print("⚡ Кеш адміністраторів прогріто")
+    except Exception as e:
+        print(f"⚠️ Помилка прогріву кешу адмінів: {e}")
+
     print("Запуск веб-сервера (для Render)...")
     await start_web_server()
 
     print("Запуск бота...")
-    await dp.start_polling(bot)
+    await dp.start_polling(
+        bot,
+        allowed_updates=dp.resolve_used_update_types()
+    )
 
 
 if __name__ == "__main__":
