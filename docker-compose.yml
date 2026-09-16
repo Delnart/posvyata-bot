@@ -1,0 +1,41 @@
+# ============================================================
+# docker-compose.yml — тільки для ЛОКАЛЬНОЇ розробки
+#
+# На Render деплоїш тільки бота (Background Worker).
+# БД — Neon (вказуй їх connection string у .env / Render env vars).
+#
+# Для локальної розробки замінюй BD_ENGINE в .env на:
+#   postgresql+asyncpg://admin:secret@localhost:5433/event_db
+# ============================================================
+
+services:
+  bot:
+    build: .
+    container_name: posvyata_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:15-alpine
+    container_name: posvyata_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: event_db
+    ports:
+      - "5433:5432"   # 5433 щоб не конфліктувати з іншими ботами
+    volumes:
+      - pgdata_posvyata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d event_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata_posvyata:
