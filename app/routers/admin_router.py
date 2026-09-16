@@ -58,6 +58,29 @@ async def start_broadcast(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(BroadcastAdmin.waiting_for_message)
 
 
+async def _run_broadcast(bot: types.Bot, message: types.Message, users: list, admin_id: int):
+    success_count = 0
+    for user in users:
+        try:
+            await message.send_copy(chat_id=user.telegram_id)
+            success_count += 1
+            await asyncio.sleep(0.05)  # Захист від лімітів спаму Telegram
+        except Exception:
+            pass
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Повернутись в панель", callback_data="controller_hub_new")
+    try:
+        await bot.send_message(
+            chat_id=admin_id,
+            text=f"✅ <b>Розсилку завершено!</b>\nДоставлено: {success_count} з {len(users)}.",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
+
+
 @router.message(BroadcastAdmin.waiting_for_message)
 async def process_broadcast_message(message: types.Message, state: FSMContext):
     if not await is_admin(message.from_user.id):
@@ -70,23 +93,16 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
-    await message.answer(f"⏳ Починаю розсилку для {len(users)} учасників. Зачекайте...")
-
-    success_count = 0
-    for user in users:
-        try:
-            await message.send_copy(chat_id=user.telegram_id)
-            success_count += 1
-            await asyncio.sleep(0.05)  # Захист від лімітів спаму Telegram
-        except Exception:
-            pass
-
     builder = InlineKeyboardBuilder()
     builder.button(text="Повернутись в панель", callback_data="controller_hub_new")
     await message.answer(
-        f"✅ Розсилку завершено!\nДоставлено: {success_count} з {len(users)}.",
-        reply_markup=builder.as_markup()
+        f"⏳ <b>Розсилку запущено у фоні</b> для {len(users)} учасників.\n"
+        f"Ти можеш користуватись ботом, звіт надійде після завершення.",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
     )
+
+    asyncio.create_task(_run_broadcast(message.bot, message, users, message.from_user.id))
     await state.clear()
 
 
