@@ -2,7 +2,7 @@ import os
 import asyncio
 from dotenv import load_dotenv
 
-from aiogram import Router, types, F
+from aiogram import Router, types, F, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -58,7 +58,7 @@ async def start_broadcast(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(BroadcastAdmin.waiting_for_message)
 
 
-async def _run_broadcast(bot: types.Bot, message: types.Message, users: list, admin_id: int):
+async def _run_broadcast(bot: Bot, message: types.Message, users: list, admin_id: int):
     success_count = 0
     for user in users:
         try:
