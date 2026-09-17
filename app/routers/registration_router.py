@@ -50,15 +50,7 @@ RULES_TEXT = (
 class RegisterForm(StatesGroup):
     entering_name = State()
     entering_username = State()
-
-    # Вибір університету
-    choosing_university = State()
-
-    # Гілка КПІ
-    choosing_faculty_kpi = State()
-    entering_group_kpi = State()
-
-    # Спільні кроки
+    entering_group = State()
     agreeing_to_rules = State()
     waiting_confirmation = State()
 
@@ -94,7 +86,7 @@ async def start_registration(callback: types.CallbackQuery, state: FSMContext):
         "💙 <b>Вхід на захід вільний, але будемо дуже вдячні за донат на актуальний збір:</b>\n"
         f"🔗 <a href='{MONO_JAR_URL}'>Посилання на банку</a>\n\n"
         "───────────────\n"
-        "[1/5] Введи твоє ПІБ\n"
+        "Введи твоє ПІБ\n"
         "Приклад: Шевченко Тарас Григорович\n\n"
         "<i>*після підтвердження реєстрації дані можна змінити в профілі</i>"
     )
@@ -140,31 +132,26 @@ async def process_name(message: types.Message, state: FSMContext):
     main_msg_id = data.get("main_message_id")
 
     if message.from_user.username:
-        # Юзернейм є — пропускаємо цей крок і переходимо до вибору університету
+        # Юзернейм є — переходимо одразу до вводу групи
         await state.update_data(tg_username=f"@{message.from_user.username}")
         
-        builder = InlineKeyboardBuilder()
-        builder.button(text="КПІ ім. Ігоря Сікорського", callback_data="uni_kpi")
-        builder.adjust(1)
-        
-        text = "Обери свій університет (Крок 2 з 4):"
+        text = "Введи свою групу\nПриклад: ІП-55"
         
         if main_msg_id:
             try:
                 await message.bot.edit_message_text(
                     chat_id=message.chat.id,
                     message_id=main_msg_id,
-                    text=text,
-                    reply_markup=builder.as_markup()
+                    text=text
                 )
             except Exception:
-                new_msg = await message.answer(text, reply_markup=builder.as_markup())
+                new_msg = await message.answer(text)
                 await state.update_data(main_message_id=new_msg.message_id)
         else:
-            new_msg = await message.answer(text, reply_markup=builder.as_markup())
+            new_msg = await message.answer(text)
             await state.update_data(main_message_id=new_msg.message_id)
             
-        await state.set_state(RegisterForm.choosing_university)
+        await state.set_state(RegisterForm.entering_group)
         
     else:
         # Юзернейму немає — запитуємо вручну
@@ -214,65 +201,29 @@ async def process_username_input(message: types.Message, state: FSMContext):
     except Exception:
         pass
 
-    builder = InlineKeyboardBuilder()
-    builder.button(text="КПІ ім. Ігоря Сікорського", callback_data="uni_kpi")
-    builder.adjust(1)
-    
-    text = "Обери свій університет (Крок 2 з 4):"
+    text = "Введи свою групу\nПриклад: ІП-55"
 
     if main_msg_id:
         try:
             await message.bot.edit_message_text(
                 chat_id=message.chat.id,
                 message_id=main_msg_id,
-                text=text,
-                reply_markup=builder.as_markup()
+                text=text
             )
         except Exception:
-            new_msg = await message.answer(text, reply_markup=builder.as_markup())
+            new_msg = await message.answer(text)
             await state.update_data(main_message_id=new_msg.message_id)
     else:
-        new_msg = await message.answer(text, reply_markup=builder.as_markup())
+        new_msg = await message.answer(text)
         await state.update_data(main_message_id=new_msg.message_id)
-    await state.set_state(RegisterForm.choosing_university)
+        
+    await state.set_state(RegisterForm.entering_group)
 
 
-# ==================== КРОК 3: УНІВЕРСИТЕТ ====================
+# ==================== КРОК 3: ГРУПА ====================
 
-@router.callback_query(RegisterForm.choosing_university, F.data == "uni_kpi")
-async def process_university_choice(callback: types.CallbackQuery, state: FSMContext):
-    await state.update_data(university="КПІ ім. Ігоря Сікорського")
-
-    # Будуємо клавіатуру факультетів КПІ (тільки ФІОТ)
-    builder = InlineKeyboardBuilder()
-    for fac in FACULTIES_KPI:
-        builder.button(text=fac, callback_data=f"fac_{fac}")
-    builder.adjust(1)
-
-    await callback.message.edit_text(
-        "[4/5] Обери свій факультет:",
-        reply_markup=builder.as_markup()
-    )
-    await state.set_state(RegisterForm.choosing_faculty_kpi)
-    await callback.answer()
-
-
-# ==================== ГІЛКА КПІ ====================
-
-@router.callback_query(RegisterForm.choosing_faculty_kpi, F.data.startswith("fac_"))
-async def process_kpi_faculty_choice(callback: types.CallbackQuery, state: FSMContext):
-    faculty_name = callback.data.replace("fac_", "")
-    await state.update_data(faculty=faculty_name)
-    
-    await callback.message.edit_text(
-        "[5/5] Введи свою групу\nПриклад: ІП-55"
-    )
-    await state.set_state(RegisterForm.entering_group_kpi)
-    await callback.answer()
-
-
-@router.message(RegisterForm.entering_group_kpi, F.text)
-async def process_kpi_group(message: types.Message, state: FSMContext):
+@router.message(RegisterForm.entering_group, F.text)
+async def process_group(message: types.Message, state: FSMContext):
     data = await state.get_data()
     err_msg_id = data.get("error_msg_id")
     if err_msg_id:
@@ -294,7 +245,11 @@ async def process_kpi_group(message: types.Message, state: FSMContext):
         await state.update_data(error_msg_id=err_msg.message_id)
         return
         
-    await state.update_data(group=group_text)
+    await state.update_data(
+        group=group_text,
+        university="КПІ ім. Ігоря Сікорського",
+        faculty="ФІОТ"
+    )
     await ask_for_rules(message, state)
 
 
@@ -343,23 +298,15 @@ async def show_confirmation_screen(event: types.CallbackQuery, state: FSMContext
     data = await state.get_data()
     name = data.get('name')
     tg_username = data.get('tg_username')
-    university = data.get('university')
-    faculty = data.get('faculty')
     group = data.get('group')
 
     confirmation_text = (
         f"<b>Перевір свої дані перед підтвердженням:</b>\n\n"
         f"<b>ПІБ:</b> {name}\n"
         f"<b>Telegram:</b> {tg_username}\n"
-        f"<b>Університет:</b> {university}\n"
+        f"<b>Група:</b> {group}\n\n"
+        f"Усе правильно? Натисни підтвердити або скасуй реєстрацію."
     )
-    
-    if faculty and faculty != "-":
-        confirmation_text += f"<b>Факультет:</b> {faculty}\n"
-    if group and group != "-":
-        confirmation_text += f"<b>Група:</b> {group}\n"
-        
-    confirmation_text += "\nУсе правильно? Натисни підтвердити або скасуй реєстрацію."
 
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Підтвердити реєстрацію", callback_data="confirm_registration")
@@ -375,8 +322,8 @@ async def confirm_registration(callback: types.CallbackQuery, state: FSMContext)
     data = await state.get_data()
     name = data.get('name')
     tg_username = data.get('tg_username')
-    university = data.get('university')
-    faculty = data.get('faculty')
+    university = data.get('university') or "КПІ ім. Ігоря Сікорського"
+    faculty = data.get('faculty') or "ФІОТ"
     group = data.get('group')
 
     # Якщо юзер вводив юзернейм вручну — беремо його,
