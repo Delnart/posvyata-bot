@@ -141,7 +141,6 @@ async def start_edit_text_field(callback: types.CallbackQuery, state: FSMContext
         if user and ("КПІ" in user.university.upper() or "СІКОРСЬКОГО" in user.university.upper()):
             for fac in FACULTIES_KPI:
                 builder.button(text=fac, callback_data=f"prof_fac_{fac}")
-            builder.button(text="Інший факультет", callback_data="prof_fac_other")
             builder.button(text="Скасувати", callback_data="prof_edit_menu")
             builder.adjust(1)
             prompt = "Обери свій факультет:"
@@ -161,21 +160,14 @@ async def start_edit_text_field(callback: types.CallbackQuery, state: FSMContext
 async def process_prof_kpi_faculty_choice(callback: types.CallbackQuery, state: FSMContext):
     choice = callback.data.replace("prof_fac_", "")
     
-    if choice == "other":
-        builder = InlineKeyboardBuilder()
-        builder.button(text="Скасувати", callback_data="prof_edit_menu")
-        await callback.message.edit_text("Введи назву свого факультету:", reply_markup=builder.as_markup())
-        # state stays waiting_for_new_faculty
-    else:
-        await update_user_field(callback.from_user.id, "faculty", choice)
-        asyncio.create_task(update_user_in_sheet(tg_id=callback.from_user.id, field="faculty", new_value=choice))
-        
-        builder = InlineKeyboardBuilder()
-        builder.button(text="Повернутися в профіль", callback_data="profile")
-        
-        await callback.message.edit_text("✅ Дані успішно оновлено!", reply_markup=builder.as_markup())
-        await state.clear()
-        
+    await update_user_field(callback.from_user.id, "faculty", choice)
+    asyncio.create_task(update_user_in_sheet(tg_id=callback.from_user.id, field="faculty", new_value=choice))
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Повернутися в профіль", callback_data="profile")
+    
+    await callback.message.edit_text("✅ Дані успішно оновлено!", reply_markup=builder.as_markup())
+    await state.clear()
     await callback.answer()
 
 

@@ -56,13 +56,7 @@ class RegisterForm(StatesGroup):
 
     # Гілка КПІ
     choosing_faculty_kpi = State()
-    entering_faculty_text_kpi = State()
     entering_group_kpi = State()
-
-    # Гілка «Інший університет»
-    entering_university_other = State()
-    entering_faculty_other = State()
-    entering_group_other = State()
 
     # Спільні кроки
     agreeing_to_rules = State()
@@ -151,7 +145,6 @@ async def process_name(message: types.Message, state: FSMContext):
         
         builder = InlineKeyboardBuilder()
         builder.button(text="КПІ ім. Ігоря Сікорського", callback_data="uni_kpi")
-        builder.button(text="Інший університет", callback_data="uni_other")
         builder.adjust(1)
         
         text = "Обери свій університет (Крок 2 з 4):"
@@ -223,7 +216,6 @@ async def process_username_input(message: types.Message, state: FSMContext):
 
     builder = InlineKeyboardBuilder()
     builder.button(text="КПІ ім. Ігоря Сікорського", callback_data="uni_kpi")
-    builder.button(text="Інший університет", callback_data="uni_other")
     builder.adjust(1)
     
     text = "Обери свій університет (Крок 2 з 4):"
@@ -247,32 +239,21 @@ async def process_username_input(message: types.Message, state: FSMContext):
 
 # ==================== КРОК 3: УНІВЕРСИТЕТ ====================
 
-@router.callback_query(RegisterForm.choosing_university, F.data.startswith("uni_"))
+@router.callback_query(RegisterForm.choosing_university, F.data == "uni_kpi")
 async def process_university_choice(callback: types.CallbackQuery, state: FSMContext):
-    choice = callback.data
+    await state.update_data(university="КПІ ім. Ігоря Сікорського")
 
-    if choice == "uni_kpi":
-        await state.update_data(university="КПІ ім. Ігоря Сікорського")
+    # Будуємо клавіатуру факультетів КПІ (тільки ФІОТ)
+    builder = InlineKeyboardBuilder()
+    for fac in FACULTIES_KPI:
+        builder.button(text=fac, callback_data=f"fac_{fac}")
+    builder.adjust(1)
 
-        # Будуємо клавіатуру факультетів КПІ
-        builder = InlineKeyboardBuilder()
-        for fac in FACULTIES_KPI:
-            builder.button(text=fac, callback_data=f"fac_{fac}")
-        builder.button(text="Інший факультет", callback_data="fac_other")
-        builder.adjust(1)
-
-        await callback.message.edit_text(
-            "[4/5] Обери свій факультет:",
-            reply_markup=builder.as_markup()
-        )
-        await state.set_state(RegisterForm.choosing_faculty_kpi)
-
-    elif choice == "uni_other":
-        await callback.message.edit_text(
-            "[3/5] Введи назву свого університету:"
-        )
-        await state.set_state(RegisterForm.entering_university_other)
-
+    await callback.message.edit_text(
+        "[4/5] Обери свій факультет:",
+        reply_markup=builder.as_markup()
+    )
+    await state.set_state(RegisterForm.choosing_faculty_kpi)
     await callback.answer()
 
 
@@ -280,44 +261,14 @@ async def process_university_choice(callback: types.CallbackQuery, state: FSMCon
 
 @router.callback_query(RegisterForm.choosing_faculty_kpi, F.data.startswith("fac_"))
 async def process_kpi_faculty_choice(callback: types.CallbackQuery, state: FSMContext):
-    choice = callback.data
-
-    if choice == "fac_other":
-        await callback.message.edit_text("[4/5] Введи назву свого факультету:")
-        await state.set_state(RegisterForm.entering_faculty_text_kpi)
-    else:
-        faculty_name = choice.replace("fac_", "")
-        await state.update_data(faculty=faculty_name)
-        
-        await callback.message.edit_text(
-            "[5/5] Введи свою групу\nПриклад: ІП-55"
-        )
-        await state.set_state(RegisterForm.entering_group_kpi)
-
-    await callback.answer()
-
-
-@router.message(RegisterForm.entering_faculty_text_kpi, F.text)
-async def process_kpi_faculty_text(message: types.Message, state: FSMContext):
-    await state.update_data(faculty=message.text.strip().upper())
-
-    data = await state.get_data()
-    main_msg_id = data.get("main_message_id")
+    faculty_name = callback.data.replace("fac_", "")
+    await state.update_data(faculty=faculty_name)
     
-    text = "[5/5] Введи свою групу\nПриклад: ІП-55"
-    
-    try:
-        await message.delete()
-        await message.bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=main_msg_id,
-            text=text
-        )
-    except Exception:
-        new_msg = await message.answer(text)
-        await state.update_data(main_message_id=new_msg.message_id)
-
+    await callback.message.edit_text(
+        "[5/5] Введи свою групу\nПриклад: ІП-55"
+    )
     await state.set_state(RegisterForm.entering_group_kpi)
+    await callback.answer()
 
 
 @router.message(RegisterForm.entering_group_kpi, F.text)
@@ -344,24 +295,6 @@ async def process_kpi_group(message: types.Message, state: FSMContext):
         return
         
     await state.update_data(group=group_text)
-    await ask_for_rules(message, state)
-
-
-# ==================== ГІЛКА ІНШИЙ УНІВЕРСИТЕТ ====================
-
-@router.message(RegisterForm.entering_university_other, F.text)
-async def process_other_university(message: types.Message, state: FSMContext):
-    await state.update_data(
-        university=message.text.strip(),
-        faculty="-",
-        group="-"
-    )
-
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
     await ask_for_rules(message, state)
 
 
