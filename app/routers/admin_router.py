@@ -26,9 +26,11 @@ router = Router()
 
 
 class BroadcastAdmin(StatesGroup):
-    waiting_for_message = State()         # Загальна розсилка всім
+    waiting_for_message = State()         # Загальна розсилка всім: очікуємо повідомлення
+    confirm_all = State()                 # Підтвердження розсилки всім
     waiting_for_recipients = State()      # Введення тегів або ID
-    waiting_for_targeted_msg = State()    # Повідомлення для конкретних отримувачів
+    waiting_for_targeted_msg = State()    # Очікуємо повідомлення для цільових
+    confirm_targeted = State()            # Підтвердження таргетованої розсилки
 
 
 class AdminUnblock(StatesGroup):
@@ -130,25 +132,61 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
+    await state.update_data(
+        broadcast_msg_id=message.message_id,
+        broadcast_chat_id=message.chat.id
+    )
+    await state.set_state(BroadcastAdmin.confirm_all)
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text=f"🚨 ТАК, надіслати ВСІМ ({len(users)} ос.)", callback_data="confirm_bc_all")
+    builder.button(text="❌ Скасувати розсилку", callback_data="admin_write_participants")
+    builder.adjust(1)
+
+    await message.reply(
+        f"⚠️ <b>УВАГА! Підтвердження ЗАГАЛЬНОЇ розсилки</b>\n\n"
+        f"Ви збираєтесь надіслати повідомлення вище <b>ВСІМ {len(users)} зареєстрованим учасникам</b>.\n\n"
+        f"Перевірте зміст повідомлення (текст, посилання, медіа). Якщо все вірно — натисніть червону кнопку нижче для запуску розсилки.",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data == "confirm_bc_all", BroadcastAdmin.confirm_all)
+async def confirm_broadcast_all_handler(callback: types.CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("Немає доступу.", show_alert=True)
+        return
+
+    data = await state.get_data()
+    msg_id = data.get("broadcast_msg_id")
+    from_chat_id = data.get("broadcast_chat_id")
+    await state.clear()
+
+    if not msg_id or not from_chat_id:
+        await callback.answer("Помилка: повідомлення для розсилки не знайдено.", show_alert=True)
+        return
+
+    users = await get_all_users()
     builder = InlineKeyboardBuilder()
     builder.button(text="Повернутись в панель", callback_data="controller_hub_new")
-    await message.answer(
-        f"⏳ <b>Розсилку запущено у фоні</b> для {len(users)} учасників.\n"
+    await callback.message.edit_text(
+        f"⏳ <b>Загальну розсилку запущено у фоні</b> для {len(users)} учасників.\n"
         f"Ти можеш користуватись ботом, звіт надійде після завершення.",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
 
-    asyncio.create_task(_run_broadcast(message.bot, message, users, message.from_user.id))
-    await state.clear()
+    asyncio.create_task(_run_broadcast(callback.bot, from_chat_id, msg_id, users, callback.from_user.id))
+    await callback.answer()
 
 
-async def _run_broadcast(bot: Bot, message: types.Message, users: list, admin_id: int):
+async def _run_broadcast(bot: Bot, from_chat_id: int, message_id: int, users: list, admin_id: int):
     success_count = 0
     fail_count = 0
     for user in users:
         try:
-            await message.send_copy(chat_id=user.telegram_id)
+            await bot.copy_message(chat_id=user.telegram_id, from_chat_id=from_chat_id, message_id=message_id)
             success_count += 1
             await asyncio.sleep(0.05)
         except Exception:
@@ -309,25 +347,64 @@ async def process_targeted_broadcast_message(message: types.Message, state: FSMC
         await state.clear()
         return
 
+    await state.update_data(
+        broadcast_msg_id=message.message_id,
+        broadcast_chat_id=message.chat.id
+    )
+    await state.set_state(BroadcastAdmin.confirm_targeted)
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text=f"✅ Так, надіслати ({len(target_user_ids)} ос.)", callback_data="confirm_bc_targeted")
+    builder.button(text="❌ Скасувати", callback_data="admin_write_participants")
+    builder.adjust(1)
+
+    recipients_desc = f"<b>{len(target_user_ids)}</b> особам" if len(target_user_ids) > 1 else "<b>1</b> особі (тільки вам/обраному отримувачу)"
+
+    await message.reply(
+        f"🎯 <b>Підтвердження розсилки</b>\n\n"
+        f"Повідомлення вище буде надіслано: {recipients_desc}.\n"
+        f"<i>Загальна база учасників НЕ отримає це повідомлення.</i>\n\n"
+        f"Надіслати?",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data == "confirm_bc_targeted", BroadcastAdmin.confirm_targeted)
+async def confirm_broadcast_targeted_handler(callback: types.CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("Немає доступу.", show_alert=True)
+        return
+
+    data = await state.get_data()
+    msg_id = data.get("broadcast_msg_id")
+    from_chat_id = data.get("broadcast_chat_id")
+    target_user_ids = data.get("target_user_ids", [])
+    await state.clear()
+
+    if not msg_id or not from_chat_id or not target_user_ids:
+        await callback.answer("Помилка: дані для розсилки не знайдено.", show_alert=True)
+        return
+
     builder = InlineKeyboardBuilder()
     builder.button(text="Повернутись в панель", callback_data="controller_hub_new")
-    await message.answer(
+    await callback.message.edit_text(
         f"⏳ <b>Розсилку запущено у фоні</b> для {len(target_user_ids)} вибраних отримувачів.\n"
         f"Ти можеш користуватись ботом, звіт надійде після завершення.",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
 
-    asyncio.create_task(_run_targeted_broadcast(message.bot, message, target_user_ids, message.from_user.id))
-    await state.clear()
+    asyncio.create_task(_run_targeted_broadcast(callback.bot, from_chat_id, msg_id, target_user_ids, callback.from_user.id))
+    await callback.answer()
 
 
-async def _run_targeted_broadcast(bot: Bot, message: types.Message, target_ids: list[int], admin_id: int):
+async def _run_targeted_broadcast(bot: Bot, from_chat_id: int, message_id: int, target_ids: list[int], admin_id: int):
     success_count = 0
     fail_count = 0
     for uid in target_ids:
         try:
-            await message.send_copy(chat_id=uid)
+            await bot.copy_message(chat_id=uid, from_chat_id=from_chat_id, message_id=message_id)
             success_count += 1
             await asyncio.sleep(0.05)
         except Exception:
