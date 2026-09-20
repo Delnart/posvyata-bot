@@ -123,11 +123,15 @@ async def update_user_in_sheet(tg_id: int, field: str, new_value):
     await asyncio.to_thread(_update_user_sync, str(tg_id), field, new_value)
 
 
-def _delete_user_sync(tg_id: str):
+def _delete_user_sync(tg_id: str, username: str = None):
     sh = get_sheet()
     ws = sh.sheet1
     try:
         cell = ws.find(str(tg_id), in_column=8)
+        if not cell and username:
+            clean_username = username.lstrip("@").strip()
+            if clean_username:
+                cell = ws.find(clean_username, in_column=3)
         if cell:
             ws.delete_rows(cell.row)
             print(f"✅ Sheets: Видалено рядок для ID {tg_id}")
@@ -137,5 +141,5 @@ def _delete_user_sync(tg_id: str):
         print(f"❌ Sheets: Помилка видалення рядка для ID {tg_id}: {e}")
 
 
-async def delete_user_from_sheet(tg_id: int):
-    await asyncio.to_thread(_delete_user_sync, str(tg_id))
+async def delete_user_from_sheet(tg_id: int, username: str = None):
+    await asyncio.to_thread(_delete_user_sync, str(tg_id), username)

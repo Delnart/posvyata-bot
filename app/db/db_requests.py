@@ -135,10 +135,11 @@ async def cancel_users_registration(users_to_cancel: list) -> list[int]:
     async with engine.begin() as conn:
         for u in users_to_cancel:
             uid = u.telegram_id if hasattr(u, "telegram_id") else int(u)
+            uname = getattr(u, "username", None)
             del_stmt = delete(user_list).where(user_list.c.telegram_id == uid)
             await conn.execute(del_stmt)
             cancelled_ids.append(uid)
-            asyncio.create_task(delete_user_from_sheet(uid))
+            asyncio.create_task(delete_user_from_sheet(uid, username=uname))
 
     return cancelled_ids
 
@@ -147,8 +148,11 @@ async def block_user(tg_id: int, username: str = None, name: str = None,
                      attempted_group: str = None, reason: str = "Спроба реєстрації з іншого факультету") -> None:
     """
     Додає користувача до списку заблокованих (якщо ще не додано).
-    Також видаляє його з user_list, якщо він був зареєстрований.
+    Також видаляє його з user_list, якщо він був зареєстрований, і видаляє рядок з Google Таблиці.
     """
+    from app.utils.google_sheets import delete_user_from_sheet
+    import asyncio
+
     async with engine.begin() as conn:
         check_stmt = select(blocked_users).where(blocked_users.c.telegram_id == tg_id)
         exists = (await conn.execute(check_stmt)).fetchone()
@@ -164,6 +168,7 @@ async def block_user(tg_id: int, username: str = None, name: str = None,
 
         del_user_stmt = delete(user_list).where(user_list.c.telegram_id == tg_id)
         await conn.execute(del_user_stmt)
+        asyncio.create_task(delete_user_from_sheet(tg_id, username=username))
 
 
 async def is_user_blocked(tg_id: int) -> bool:
