@@ -118,6 +118,31 @@ async def get_non_fiot_users() -> list:
     return non_fiot
 
 
+async def cancel_users_registration(users_to_cancel: list) -> list[int]:
+    """
+    Видаляє вказаних користувачів із таблиці user_list (скасування реєстрації).
+    НЕ вносить їх до списку blocked_users, тобто вони можуть зареєструватись знову.
+
+    Параметри:
+    users_to_cancel: список об'єктів користувачів або список числових telegram_id.
+
+    Повертає список успішно видалених telegram_id.
+    """
+    from app.utils.google_sheets import delete_user_from_sheet
+    import asyncio
+
+    cancelled_ids = []
+    async with engine.begin() as conn:
+        for u in users_to_cancel:
+            uid = u.telegram_id if hasattr(u, "telegram_id") else int(u)
+            del_stmt = delete(user_list).where(user_list.c.telegram_id == uid)
+            await conn.execute(del_stmt)
+            cancelled_ids.append(uid)
+            asyncio.create_task(delete_user_from_sheet(uid))
+
+    return cancelled_ids
+
+
 async def block_user(tg_id: int, username: str = None, name: str = None,
                      attempted_group: str = None, reason: str = "Спроба реєстрації з іншого факультету") -> None:
     """
