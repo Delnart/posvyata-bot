@@ -8,7 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
 
 import app.utils.keyboards as kb
-from app.db.db_requests import is_admin, get_user, get_blocked_users
+from app.db.db_requests import is_admin, get_user, get_blocked_users, get_non_fiot_users
 
 from app.routers.admin_router import router as admin_router
 from app.routers.registration_router import router as registration_router
@@ -58,8 +58,14 @@ async def cmd_start(message: types.Message):
     )
 
     if is_user_admin:
-        blocked = await get_blocked_users()
-        keyboard = kb.create_main_admin_keyboard(blocked_count=len(blocked))
+        blocked, non_fiot = await asyncio.gather(
+            get_blocked_users(),
+            get_non_fiot_users()
+        )
+        keyboard = kb.create_main_admin_keyboard(
+            blocked_count=len(blocked),
+            non_fiot_count=len(non_fiot)
+        )
         text = WELCOME_TEXT + (
             "\n\n───────────────\n"
             "🔐 Ти маєш права <b>Адміна</b>\nОбери дію:"
@@ -96,8 +102,14 @@ async def cmd_back_hub(callback: types.CallbackQuery, state: FSMContext):
     )
 
     if is_user_admin:
-        blocked = await get_blocked_users()
-        keyboard = kb.create_main_admin_keyboard(blocked_count=len(blocked))
+        blocked, non_fiot = await asyncio.gather(
+            get_blocked_users(),
+            get_non_fiot_users()
+        )
+        keyboard = kb.create_main_admin_keyboard(
+            blocked_count=len(blocked),
+            non_fiot_count=len(non_fiot)
+        )
         text = WELCOME_TEXT + (
             "\n\n───────────────\n"
             "🔐 Ти маєш права <b>Адміна</b>\nОбери дію:"

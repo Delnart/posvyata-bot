@@ -8,6 +8,7 @@ from aiogram.fsm.state import StatesGroup, State
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.utils.keyboards import create_main_admin_keyboard
+from app.utils.group_validator import detect_faculty
 from app.db.db_requests import (
     is_admin,
     get_all_users,
@@ -53,8 +54,14 @@ async def toggle_registration(callback: types.CallbackQuery):
         f"Оберіть дію:"
     )
 
-    blocked = await get_blocked_users()
-    keyboard = create_main_admin_keyboard(blocked_count=len(blocked))
+    blocked, non_fiot = await asyncio.gather(
+        get_blocked_users(),
+        get_non_fiot_users()
+    )
+    keyboard = create_main_admin_keyboard(
+        blocked_count=len(blocked),
+        non_fiot_count=len(non_fiot)
+    )
     await callback.message.edit_text(text=text, reply_markup=keyboard.as_markup(), parse_mode="HTML")
     await callback.answer(f"Реєстрація тепер {status}")
 
@@ -676,6 +683,62 @@ async def confirm_cancel_non_fiot_handler(callback: types.CallbackQuery):
         parse_mode="HTML"
     )
     await callback.answer("Реєстрації скасовано!")
+
+
+# ==================== ПЕРЕГЛЯД РЕЄСТРАЦІЙ НЕ З ФІОТ ====================
+
+@router.callback_query(F.data == "admin_view_non_fiot")
+async def view_non_fiot_handler(callback: types.CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("Немає доступу.", show_alert=True)
+        return
+
+    await state.clear()
+    non_fiot = await get_non_fiot_users()
+
+    builder = InlineKeyboardBuilder()
+    if not non_fiot:
+        builder.button(text="🔙 У панель адміна", callback_data="controller_hub_new")
+        await callback.message.edit_text(
+            "🎉 <b>Усі зареєстровані учасники — з ФІОТ!</b>\n\n"
+            "Немає жодної активної реєстрації з інших факультетів або з некоректним шифром групи.",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+        await callback.answer()
+        return
+
+    builder.button(text=f"📨 Написати їм усім ({len(non_fiot)})", callback_data="bc_mode_non_fiot")
+    builder.button(text=f"❌ Скасувати їм реєстрацію ({len(non_fiot)})", callback_data="cancel_reg_non_fiot")
+    builder.button(text="🔙 Назад у панель", callback_data="controller_hub_new")
+    builder.adjust(1)
+
+    lines = [
+        f"👥 <b>Зареєстровані учасники не з ФІОТ ({len(non_fiot)} осіб):</b>\n",
+        "<i>Ці користувачі вказали групу іншого факультету або нестандартний шифр:</i>\n"
+    ]
+
+    for idx, u in enumerate(non_fiot[:25], 1):
+        uname = f" (@{u.username.lstrip('@')})" if u.username else ""
+        faculty = detect_faculty(u.group_name)
+        lines.append(
+            f"<b>{idx}.</b> {u.name}{uname}\n"
+            f"   • Група: <code>{u.group_name}</code> ({faculty})\n"
+            f"   • ID: <code>{u.telegram_id}</code>"
+        )
+
+    if len(non_fiot) > 25:
+        lines.append(f"\n<i>...та ще {len(non_fiot) - 25} осіб.</i>")
+
+    lines.append("\nОберіть потрібну дію:")
+
+    await callback.message.edit_text(
+        "\n".join(lines),
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
 
 
 

@@ -91,3 +91,48 @@ def is_fiot_group(group_name: str) -> bool:
         return False
     norm = normalize_group_name(group_name)
     return bool(FIOT_GROUP_PATTERN.match(norm))
+
+
+KPI_FACULTY_BY_PREFIX = {
+    "А": "ННІАТ",
+    "Б": "ФБТ",
+    "В": "ННВПІ",
+    "Г": "ННІЕЕ",
+    "Д": "ФЕЛ",
+    "Е": "ФЕА",
+    "З": "ФБМІ",
+    "І": "ФІОТ",
+    "М": "ННММІ",
+    "Н": "ННІМЗ",
+    "О": "ФМФ",
+    "П": "ПБФ",
+    "Р": "РТФ",
+    "С": "ФСП",
+    "Т": "ННІАТЕ",
+    "У": "ФММ",
+    "Ф": "ННФТІ",
+    "Х": "ХТФ",
+    "Ц": "ННІТС",
+}
+
+
+def detect_faculty(group_name: str) -> str:
+    """
+    Визначає підрозділ/факультет КПІ за першими літерами шифру академічної групи.
+    """
+    if not group_name or len(group_name) < 2:
+        return "Невідомо"
+    norm = normalize_group_name(group_name)
+    first_two = norm[:2]
+    first = first_two[0]
+
+    if first == "К":
+        if first_two in ("КВ", "КМ", "КП"):
+            return "ФПМ"
+        return "ННІПСА"
+    if first == "Л":
+        if first_two in ("ЛА", "ЛН", "ЛФ", "ЛО"):
+            return "ФЛ"
+        return "ІХФ"
+
+    return KPI_FACULTY_BY_PREFIX.get(first, "Інший факультет")
