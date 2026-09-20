@@ -43,6 +43,7 @@ def create_main_admin_keyboard(blocked_count: int = 0) -> InlineKeyboardBuilder:
 
     builder.button(text=reg_btn_text, callback_data="admin_stop_registration")
     builder.button(text="📨 Написати учасникам", callback_data="admin_write_participants")
+    builder.button(text="❌ Скасувати реєстрацію", callback_data="admin_cancel_reg_menu")
 
     blocked_btn_text = f"🚫 Заблоковані ({blocked_count})" if blocked_count > 0 else "🚫 Заблоковані"
     builder.button(text=blocked_btn_text, callback_data="admin_view_blocked")

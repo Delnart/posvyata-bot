@@ -15,6 +15,7 @@ from app.db.db_requests import (
     get_non_fiot_users,
     get_blocked_users,
     unblock_user,
+    cancel_users_registration,
 )
 from app.data.bot_state import global_state
 
@@ -31,6 +32,10 @@ class BroadcastAdmin(StatesGroup):
 
 class AdminUnblock(StatesGroup):
     waiting_for_identifier = State()
+
+
+class AdminCancelReg(StatesGroup):
+    waiting_for_identifiers = State()
 
 
 @router.callback_query(F.data == "admin_stop_registration")
@@ -475,6 +480,203 @@ async def process_unblock_identifier(message: types.Message, state: FSMContext):
 
     await message.answer(reply_msg, reply_markup=builder.as_markup(), parse_mode="HTML")
     await state.clear()
+
+
+# ==================== СКАСУВАННЯ РЕЄСТРАЦІЇ (БЕЗ БЛОКУВАННЯ) ====================
+
+@router.callback_query(F.data == "admin_cancel_reg_menu")
+async def cancel_reg_menu_handler(callback: types.CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("Немає доступу.", show_alert=True)
+        return
+
+    await state.clear()
+    non_fiot = await get_non_fiot_users()
+    non_fiot_count = len(non_fiot)
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🎯 Конкретній людині (@тег / ID)", callback_data="cancel_reg_targeted")
+    builder.button(text=f"👥 Усім не з ФІОТ ({non_fiot_count})", callback_data="cancel_reg_non_fiot")
+    builder.button(text="🔙 Назад у панель", callback_data="controller_hub_new")
+    builder.adjust(1)
+
+    text = (
+        "❌ <b>Скасування реєстрації учасників</b>\n\n"
+        "Оберіть режим:\n"
+        "• <b>🎯 Конкретній людині</b> — скасувати реєстрацію за списком @username або числових Telegram ID.\n"
+        f"• <b>👥 Усім не з ФІОТ</b> — масове скасування для студентів інших факультетів (знайдено: {non_fiot_count} осіб).\n\n"
+        "<i>Користувачі отримають повідомлення «Ваша реєстрація скасована». "
+        "Вони НЕ блокуються і зможуть зареєструватись знову, якщо вкажуть правильну групу ФІОТ.</i>"
+    )
+
+    await callback.message.edit_text(text=text, reply_markup=builder.as_markup(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "cancel_reg_targeted")
+async def cancel_reg_targeted_prompt(callback: types.CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("Немає доступу.", show_alert=True)
+        return
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Скасувати", callback_data="admin_cancel_reg_menu")
+
+    await callback.message.edit_text(
+        "🎯 <b>Скасування реєстрації окремим користувачам</b>\n\n"
+        "Введіть <b>@username</b> або числовий <b>Telegram ID</b> користувачів (через кому, пробіл або з нового рядка):\n\n"
+        "<i>Приклад:</i>\n"
+        "<code>@petrenko, @ivanov, 123456789</code>",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+    await state.set_state(AdminCancelReg.waiting_for_identifiers)
+    await callback.answer()
+
+
+@router.message(AdminCancelReg.waiting_for_identifiers)
+async def process_cancel_reg_input(message: types.Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    raw_text = message.text or ""
+    import re
+    tokens = [t.strip() for t in re.split(r"[\s,;]+", raw_text) if t.strip()]
+
+    if not tokens:
+        await message.answer("❌ Будь ласка, введіть хоча б один @тег або Telegram ID.")
+        return
+
+    found_users, not_found = await get_users_by_identifiers(tokens)
+
+    if not found_users:
+        builder = InlineKeyboardBuilder()
+        builder.button(text="Спробувати ще раз", callback_data="cancel_reg_targeted")
+        builder.button(text="Скасувати", callback_data="admin_cancel_reg_menu")
+        builder.adjust(1)
+        await message.answer(
+            f"❌ <b>Жодного користувача не знайдено в базі зареєстрованих!</b>\n\nВведено: {', '.join(tokens)}",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+        return
+
+    cancelled_ids = await cancel_users_registration(found_users)
+
+    notify_success = 0
+    for u in found_users:
+        try:
+            await message.bot.send_message(
+                chat_id=u.telegram_id,
+                text=(
+                    "⚠️ <b>Твою реєстрацію на Посвяту ФІОТ скасовано адміністратором.</b>\n\n"
+                    "Якщо ти студент ФІОТ і сталася помилка, або ти хочеш змінити дані — "
+                    "ти можеш зареєструватися повторно у боті (натисни /start або відкрий головне меню), "
+                    "вказавши свою правильну академічну групу ФІОТ (наприклад: <b>ІП-55</b>).\n\n"
+                    "<i>Чекаємо тебе на Посвяті!</i>"
+                ),
+                parse_mode="HTML"
+            )
+            notify_success += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            pass
+
+    lines = [f"✅ <b>Скасовано реєстрацію для {len(cancelled_ids)} осіб!</b>\n"]
+    for u in found_users:
+        uname = f" (@{u.username.lstrip('@')})" if u.username else ""
+        grp = f" [{u.group_name}]" if u.group_name else ""
+        lines.append(f"• <b>{u.name}</b>{uname}{grp}")
+
+    lines.append(f"\n📨 Сповіщень доставлено: {notify_success} з {len(found_users)}")
+
+    if not_found:
+        lines.append(f"\n⚠️ Не знайдено в базі ({len(not_found)}): {', '.join(not_found)}")
+
+    lines.append("\n<i>Користувачі НЕ заблоковані і можуть зареєструватися знову за бажанням.</i>")
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔙 У панель адміна", callback_data="controller_hub_new")
+
+    await message.answer("\n".join(lines), reply_markup=builder.as_markup(), parse_mode="HTML")
+    await state.clear()
+
+
+@router.callback_query(F.data == "cancel_reg_non_fiot")
+async def cancel_reg_non_fiot_prompt(callback: types.CallbackQuery):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("Немає доступу.", show_alert=True)
+        return
+
+    non_fiot = await get_non_fiot_users()
+    if not non_fiot:
+        await callback.answer("У базі немає користувачів не з ФІОТ 🎉", show_alert=True)
+        return
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text=f"✅ Так, скасувати ({len(non_fiot)} осіб)", callback_data="confirm_cancel_non_fiot")
+    builder.button(text="❌ Ні, повернутися", callback_data="admin_cancel_reg_menu")
+    builder.adjust(1)
+
+    lines = [f"⚠️ <b>Підтвердження скасування реєстрації для {len(non_fiot)} осіб не з ФІОТ:</b>\n"]
+    for u in non_fiot[:10]:
+        uname = f" (@{u.username.lstrip('@')})" if u.username else ""
+        lines.append(f"• {u.name}{uname} [група: {u.group_name}]")
+    if len(non_fiot) > 10:
+        lines.append(f"<i>...та ще {len(non_fiot) - 10} осіб</i>")
+
+    lines.append("\nКористувачам буде надіслано повідомлення: «Ваша реєстрація скасована». Вони НЕ будуть заблоковані.")
+
+    await callback.message.edit_text("\n".join(lines), reply_markup=builder.as_markup(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "confirm_cancel_non_fiot")
+async def confirm_cancel_non_fiot_handler(callback: types.CallbackQuery):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("Немає доступу.", show_alert=True)
+        return
+
+    non_fiot = await get_non_fiot_users()
+    if not non_fiot:
+        await callback.answer("Уже немає користувачів не з ФІОТ.", show_alert=True)
+        return
+
+    cancelled_ids = await cancel_users_registration(non_fiot)
+
+    notify_success = 0
+    for u in non_fiot:
+        try:
+            await callback.bot.send_message(
+                chat_id=u.telegram_id,
+                text=(
+                    "⚠️ <b>Твою реєстрацію на Посвяту ФІОТ скасовано адміністратором.</b>\n\n"
+                    "Якщо ти студент ФІОТ і сталася помилка, або ти хочеш змінити дані — "
+                    "ти можеш зареєструватися повторно у боті (натисни /start або відкрий головне меню), "
+                    "вказавши свою правильну академічну групу ФІОТ (наприклад: <b>ІП-55</b>).\n\n"
+                    "<i>Чекаємо тебе на Посвяті!</i>"
+                ),
+                parse_mode="HTML"
+            )
+            notify_success += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            pass
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔙 У панель адміна", callback_data="controller_hub_new")
+
+    await callback.message.edit_text(
+        f"✅ <b>Скасовано реєстрацію для {len(cancelled_ids)} осіб не з ФІОТ!</b>\n\n"
+        f"• Записів видалено: {len(cancelled_ids)}\n"
+        f"• Сповіщень доставлено: {notify_success}\n\n"
+        f"Користувачі не заблоковані і можуть зареєструватися заново за бажанням.",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+    await callback.answer("Реєстрації скасовано!")
+
 
 
 
