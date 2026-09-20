@@ -13,6 +13,8 @@ from app.db.db_requests import (
     get_all_users,
     get_users_by_identifiers,
     get_non_fiot_users,
+    get_blocked_users,
+    unblock_user,
 )
 from app.data.bot_state import global_state
 
@@ -25,6 +27,10 @@ class BroadcastAdmin(StatesGroup):
     waiting_for_message = State()         # Загальна розсилка всім
     waiting_for_recipients = State()      # Введення тегів або ID
     waiting_for_targeted_msg = State()    # Повідомлення для конкретних отримувачів
+
+
+class AdminUnblock(StatesGroup):
+    waiting_for_identifier = State()
 
 
 @router.callback_query(F.data == "admin_stop_registration")
@@ -42,7 +48,8 @@ async def toggle_registration(callback: types.CallbackQuery):
         f"Оберіть дію:"
     )
 
-    keyboard = create_main_admin_keyboard()
+    blocked = await get_blocked_users()
+    keyboard = create_main_admin_keyboard(blocked_count=len(blocked))
     await callback.message.edit_text(text=text, reply_markup=keyboard.as_markup(), parse_mode="HTML")
     await callback.answer(f"Реєстрація тепер {status}")
 
@@ -330,6 +337,145 @@ async def _run_targeted_broadcast(bot: Bot, message: types.Message, target_ids: 
         )
     except Exception:
         pass
+
+
+# ==================== УПРАВЛІННЯ ЗАБЛОКОВАНИМИ ====================
+
+@router.callback_query(F.data == "admin_view_blocked")
+async def view_blocked_users(callback: types.CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("Немає доступу.", show_alert=True)
+        return
+
+    await state.clear()
+    blocked = await get_blocked_users()
+
+    builder = InlineKeyboardBuilder()
+
+    if not blocked:
+        builder.button(text="🔙 Назад у панель", callback_data="controller_hub_new")
+        await callback.message.edit_text(
+            "🚫 <b>Список заблокованих порожній</b>\n\n"
+            "Наразі немає користувачів, заблокованих за спробу реєстрації з іншого факультету.",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+        await callback.answer()
+        return
+
+    lines = [f"🚫 <b>Заблоковані користувачі ({len(blocked)} осіб):</b>\n"]
+    for i, b in enumerate(blocked[:15], 1):
+        uname = f" (@{b.username.lstrip('@')})" if b.username else ""
+        grp = f" | Група: <b>{b.attempted_group}</b>" if b.attempted_group else ""
+        lines.append(f"{i}. <b>{b.name}</b>{uname}\n   ID: <code>{b.telegram_id}</code>{grp}\n   Причина: <i>{b.reason}</i>")
+
+    if len(blocked) > 15:
+        lines.append(f"\n<i>...та ще {len(blocked) - 15} осіб</i>")
+
+    # Якщо заблокованих небагато (до 6) — даємо кнопки швидкого розблокування
+    if len(blocked) <= 6:
+        for b in blocked:
+            label = f"🔓 {b.name[:18]}"
+            builder.button(text=label, callback_data=f"admin_quick_unblock_{b.telegram_id}")
+
+    builder.button(text="🔓 Розблокувати за @тегом чи ID", callback_data="admin_unblock_prompt")
+    builder.button(text="🔙 Назад у панель", callback_data="controller_hub_new")
+    builder.adjust(1)
+
+    await callback.message.edit_text("\n\n".join(lines), reply_markup=builder.as_markup(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_quick_unblock_"))
+async def quick_unblock_user_handler(callback: types.CallbackQuery):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("Немає доступу.", show_alert=True)
+        return
+
+    tg_id_str = callback.data.replace("admin_quick_unblock_", "")
+    success, msg, unblocked_id = await unblock_user(tg_id_str)
+
+    if success and unblocked_id:
+        try:
+            await callback.bot.send_message(
+                chat_id=unblocked_id,
+                text=(
+                    "🎉 <b>Твій акаунт розблоковано адміністратором!</b>\n\n"
+                    "Тепер ти можеш зареєструватися на захід. "
+                    "Будь ласка, вказуй правильну групу ФІОТ (наприклад: <b>ІП-55</b>).\n\n"
+                    "Натисни /start або перейди в головне меню для реєстрації."
+                ),
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🚫 До списку заблокованих", callback_data="admin_view_blocked")
+    builder.button(text="🔙 У панель адміна", callback_data="controller_hub_new")
+    builder.adjust(1)
+
+    await callback.message.edit_text(msg, reply_markup=builder.as_markup(), parse_mode="HTML")
+    await callback.answer("Розблоковано!")
+
+
+@router.callback_query(F.data == "admin_unblock_prompt")
+async def unblock_prompt_handler(callback: types.CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("Немає доступу.", show_alert=True)
+        return
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Скасувати", callback_data="admin_view_blocked")
+
+    await callback.message.edit_text(
+        "🔓 <b>Розблокування користувача</b>\n\n"
+        "Введіть <b>@username</b> або числовий <b>Telegram ID</b> користувача, якого потрібно розблокувати:\n\n"
+        "<i>Приклад:</i>\n"
+        "<code>@shevchenko</code> або <code>123456789</code>",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+    await state.set_state(AdminUnblock.waiting_for_identifier)
+    await callback.answer()
+
+
+@router.message(AdminUnblock.waiting_for_identifier)
+async def process_unblock_identifier(message: types.Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    identifier = (message.text or "").strip()
+    if not identifier:
+        await message.answer("❌ Будь ласка, введіть @username або Telegram ID.")
+        return
+
+    success, reply_msg, unblocked_id = await unblock_user(identifier)
+
+    if success and unblocked_id:
+        try:
+            await message.bot.send_message(
+                chat_id=unblocked_id,
+                text=(
+                    "🎉 <b>Твій акаунт розблоковано адміністратором!</b>\n\n"
+                    "Тепер ти можеш зареєструватися на захід. "
+                    "Будь ласка, вказуй правильну групу ФІОТ (наприклад: <b>ІП-55</b>).\n\n"
+                    "Натисни /start або перейди в головне меню для реєстрації."
+                ),
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🚫 До списку заблокованих", callback_data="admin_view_blocked")
+    builder.button(text="🔙 У панель адміна", callback_data="controller_hub_new")
+    builder.adjust(1)
+
+    await message.answer(reply_msg, reply_markup=builder.as_markup(), parse_mode="HTML")
+    await state.clear()
+
 
 
 

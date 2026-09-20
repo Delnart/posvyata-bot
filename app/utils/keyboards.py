@@ -28,7 +28,7 @@ def create_main_keyboard(is_existing_user=None) -> InlineKeyboardBuilder:
     return builder
 
 
-def create_main_admin_keyboard() -> InlineKeyboardBuilder:
+def create_main_admin_keyboard(blocked_count: int = 0) -> InlineKeyboardBuilder:
     builder = InlineKeyboardBuilder()
     builder.button(text="📝 Зареєструватись", callback_data="registration")
     builder.button(text="🪪 Профіль", callback_data="profile")
@@ -43,5 +43,8 @@ def create_main_admin_keyboard() -> InlineKeyboardBuilder:
 
     builder.button(text=reg_btn_text, callback_data="admin_stop_registration")
     builder.button(text="📨 Написати учасникам", callback_data="admin_write_participants")
+
+    blocked_btn_text = f"🚫 Заблоковані ({blocked_count})" if blocked_count > 0 else "🚫 Заблоковані"
+    builder.button(text=blocked_btn_text, callback_data="admin_view_blocked")
     builder.adjust(1)
     return builder
