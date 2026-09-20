@@ -4,16 +4,12 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.db.db_requests import get_user, update_user_field
 from app.utils.google_sheets import update_user_in_sheet
+from app.utils.group_validator import validate_fiot_group
 
 import asyncio
 import re
 
 router = Router()
-
-KPI_GROUP_PATTERN = re.compile(
-    r"^[А-ЯІЇЄҐа-яіїєґA-Za-z]{2,4}[-\u2014\u2013]?[а-яіїєґa-z]{0,2}\d{1,2}[а-яіїєґa-z]{0,2}$",
-    re.IGNORECASE
-)
 
 
 class ProfileForm:
@@ -165,11 +161,12 @@ async def save_text_field(message: types.Message, state: FSMContext):
             input_text = f"@{input_text}"
 
     if field_to_update == "group_name":
-        input_text = input_text.upper()
-        if not KPI_GROUP_PATTERN.match(input_text):
-            err_msg = await message.answer("❌ Некоректний формат групи. Введи у форматі, наприклад: ІП-55 або АС-з61мп")
+        is_valid, norm_group, err_text = validate_fiot_group(input_text)
+        if not is_valid:
+            err_msg = await message.answer(err_text, parse_mode="HTML")
             await state.update_data(error_msg_id=err_msg.message_id)
             return
+        input_text = norm_group
 
     await update_user_field(message.from_user.id, field_to_update, input_text)
 

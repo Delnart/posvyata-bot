@@ -7,6 +7,7 @@ from aiogram.types import ReplyKeyboardRemove
 from app.data.bot_state import global_state
 from app.utils.google_sheets import add_user_to_sheet
 from app.db.db_requests import add_user, get_user
+from app.utils.group_validator import validate_fiot_group
 import asyncio
 import logging
 import os
@@ -15,13 +16,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 router = Router()
-
-# Шаблон: 2-4 букви, тире/пробіл, до 2 букв (форма навчання: з, о, мп тощо), 1-2 цифри (курс), 1-2 цифри (номер групи)
-# Приклади: ІП-55, АС-з61, МД-з61мп, ФЕ-п21
-KPI_GROUP_PATTERN = re.compile(
-    r"^[А-ЯІЇЄҐа-яіїєґA-Za-z]{2,4}[-\u2014\u2013]?[а-яіїєґa-z]{0,2}\d{1,2}[а-яіїєґa-z]{0,2}$",
-    re.IGNORECASE
-)
 
 
 FACULTIES_KPI = [
@@ -238,15 +232,14 @@ async def process_group(message: types.Message, state: FSMContext):
     except Exception:
         pass
 
-    group_text = message.text.strip().upper()
-    
-    if not KPI_GROUP_PATTERN.match(group_text):
-        err_msg = await message.answer("❌ Некоректний формат групи. Введи у форматі, наприклад: ІП-55 або АС-з61мп")
+    is_valid, norm_group, err_text = validate_fiot_group(message.text)
+    if not is_valid:
+        err_msg = await message.answer(err_text, parse_mode="HTML")
         await state.update_data(error_msg_id=err_msg.message_id)
         return
         
     await state.update_data(
-        group=group_text,
+        group=norm_group,
         university="КПІ ім. Ігоря Сікорського",
         faculty="ФІОТ"
     )
