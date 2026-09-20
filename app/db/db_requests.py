@@ -61,6 +61,63 @@ async def get_all_users():
         return result.fetchall()
 
 
+async def get_users_by_identifiers(identifiers: list[str]) -> tuple[list, list[str]]:
+    """
+    Знаходить користувачів за списком @username або числових Telegram ID.
+
+    Повертає:
+    (found_users: list, not_found_identifiers: list[str])
+    """
+    all_users = await get_all_users()
+
+    by_id = {u.telegram_id: u for u in all_users}
+    by_username = {}
+    for u in all_users:
+        if u.username:
+            clean_u = u.username.lstrip("@").lower()
+            by_username[clean_u] = u
+
+    found_users = []
+    found_ids = set()
+    not_found = []
+
+    for raw_id in identifiers:
+        token = str(raw_id).strip()
+        if not token:
+            continue
+
+        matched = None
+        if token.isdigit():
+            tg_id = int(token)
+            matched = by_id.get(tg_id)
+        else:
+            clean_token = token.lstrip("@").lower()
+            matched = by_username.get(clean_token)
+
+        if matched:
+            if matched.telegram_id not in found_ids:
+                found_users.append(matched)
+                found_ids.add(matched.telegram_id)
+        else:
+            not_found.append(token)
+
+    return found_users, not_found
+
+
+async def get_non_fiot_users() -> list:
+    """
+    Повертає всіх зареєстрованих користувачів, чия група не належить до ФІОТ.
+    """
+    from app.utils.group_validator import is_fiot_group
+
+    all_users = await get_all_users()
+    non_fiot = []
+    for u in all_users:
+        if not is_fiot_group(u.group_name) or (u.faculty and "ФІОТ" not in u.faculty.upper()):
+            non_fiot.append(u)
+    return non_fiot
+
+
 async def update_user_field(tg_id: int, field_name: str, new_value) -> None:
     """
     Updates a specific field in the user's database record.
