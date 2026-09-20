@@ -1,5 +1,5 @@
-from sqlalchemy import select, insert, update
-from app.db.db_setup import engine, admin_list, user_list, SUPER_ADMINS
+from sqlalchemy import select, insert, update, delete
+from app.db.db_setup import engine, admin_list, user_list, blocked_users, SUPER_ADMINS
 
 
 async def add_user(tg_id: int, username: str, name: str,
@@ -116,6 +116,85 @@ async def get_non_fiot_users() -> list:
         if not is_fiot_group(u.group_name) or (u.faculty and "ФІОТ" not in u.faculty.upper()):
             non_fiot.append(u)
     return non_fiot
+
+
+async def block_user(tg_id: int, username: str = None, name: str = None,
+                     attempted_group: str = None, reason: str = "Спроба реєстрації з іншого факультету") -> None:
+    """
+    Додає користувача до списку заблокованих (якщо ще не додано).
+    Також видаляє його з user_list, якщо він був зареєстрований.
+    """
+    async with engine.begin() as conn:
+        check_stmt = select(blocked_users).where(blocked_users.c.telegram_id == tg_id)
+        exists = (await conn.execute(check_stmt)).fetchone()
+        if not exists:
+            insert_stmt = insert(blocked_users).values(
+                telegram_id=tg_id,
+                username=username,
+                name=name or "Не вказано",
+                attempted_group=attempted_group,
+                reason=reason
+            )
+            await conn.execute(insert_stmt)
+
+        del_user_stmt = delete(user_list).where(user_list.c.telegram_id == tg_id)
+        await conn.execute(del_user_stmt)
+
+
+async def is_user_blocked(tg_id: int) -> bool:
+    """
+    Перевіряє, чи заблокований користувач для участі в заході.
+    """
+    async with engine.begin() as conn:
+        stmt = select(blocked_users.c.telegram_id).where(blocked_users.c.telegram_id == tg_id)
+        result = await conn.execute(stmt)
+        return result.fetchone() is not None
+
+
+async def get_blocked_users() -> list:
+    """
+    Повертає список усіх заблокованих користувачів.
+    """
+    async with engine.begin() as conn:
+        stmt = select(blocked_users)
+        result = await conn.execute(stmt)
+        return result.fetchall()
+
+
+async def unblock_user(identifier: str | int) -> tuple[bool, str, int | None]:
+    """
+    Розблоковує користувача за Telegram ID або @username.
+
+    Повертає:
+    (success: bool, message: str, unblocked_tg_id: int | None)
+    """
+    token = str(identifier).strip()
+    if not token:
+        return False, "Порожній ідентифікатор.", None
+
+    async with engine.begin() as conn:
+        matched = None
+        if token.isdigit():
+            tg_id = int(token)
+            stmt = select(blocked_users).where(blocked_users.c.telegram_id == tg_id)
+            matched = (await conn.execute(stmt)).fetchone()
+        else:
+            clean_username = token.lstrip("@").lower()
+            stmt = select(blocked_users)
+            all_blocked = (await conn.execute(stmt)).fetchall()
+            for b in all_blocked:
+                if b.username and b.username.lstrip("@").lower() == clean_username:
+                    matched = b
+                    break
+
+        if not matched:
+            return False, f"Користувача <code>{token}</code> не знайдено серед заблокованих.", None
+
+        del_stmt = delete(blocked_users).where(blocked_users.c.telegram_id == matched.telegram_id)
+        await conn.execute(del_stmt)
+
+        user_desc = f"{matched.name} (@{matched.username})" if matched.username else f"{matched.name} (ID: {matched.telegram_id})"
+        return True, f"Користувача <b>{user_desc}</b> успішно розблоковано! ✅", matched.telegram_id
 
 
 async def update_user_field(tg_id: int, field_name: str, new_value) -> None:

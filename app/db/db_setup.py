@@ -62,6 +62,16 @@ user_list = Table(
     Column("group_name", String, nullable=True),  # група
 )
 
+blocked_users = Table(
+    "blocked_users",
+    meta,
+    Column("telegram_id", BigInteger, primary_key=True),
+    Column("username", String, nullable=True),
+    Column("name", String, nullable=True),
+    Column("attempted_group", String, nullable=True),
+    Column("reason", String, nullable=True),
+)
+
 
 async def init_db():
     """
