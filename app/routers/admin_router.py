@@ -8,7 +8,12 @@ from aiogram.fsm.state import StatesGroup, State
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.utils.keyboards import create_main_admin_keyboard
-from app.db.db_requests import is_admin, get_all_users
+from app.db.db_requests import (
+    is_admin,
+    get_all_users,
+    get_users_by_identifiers,
+    get_non_fiot_users,
+)
 from app.data.bot_state import global_state
 
 load_dotenv()
@@ -17,7 +22,9 @@ router = Router()
 
 
 class BroadcastAdmin(StatesGroup):
-    waiting_for_message = State()
+    waiting_for_message = State()         # Загальна розсилка всім
+    waiting_for_recipients = State()      # Введення тегів або ID
+    waiting_for_targeted_msg = State()    # Повідомлення для конкретних отримувачів
 
 
 @router.callback_query(F.data == "admin_stop_registration")
@@ -40,45 +47,56 @@ async def toggle_registration(callback: types.CallbackQuery):
     await callback.answer(f"Реєстрація тепер {status}")
 
 
+# ==================== МЕНЮ ВИБОРУ РЕЖИМУ РОЗСИЛКИ ====================
+
 @router.callback_query(F.data == "admin_write_participants")
-async def start_broadcast(callback: types.CallbackQuery, state: FSMContext):
+async def choose_broadcast_mode(callback: types.CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("Немає доступу.", show_alert=True)
+        return
+
+    await state.clear()
+
+    non_fiot_users = await get_non_fiot_users()
+    non_fiot_count = len(non_fiot_users)
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📢 Всім зареєстрованим", callback_data="bc_mode_all")
+    builder.button(text="🎯 Конкретним людям (@тег / ID)", callback_data="bc_mode_targeted")
+    builder.button(text=f"👥 Не з нашого факультету ({non_fiot_count})", callback_data="bc_mode_non_fiot")
+    builder.button(text="🔙 Назад у панель", callback_data="controller_hub_new")
+    builder.adjust(1)
+
+    text = (
+        "📨 <b>Оберіть режим розсилки:</b>\n\n"
+        "• <b>📢 Всім зареєстрованим</b> — розіслати повідомлення всій базі учасників.\n"
+        "• <b>🎯 Конкретним людям</b> — розіслати за списком @username або числових Telegram ID.\n"
+        f"• <b>👥 Не з нашого факультету</b> — швидка вибірка студентів не з ФІОТ (знайдено: {non_fiot_count} осіб)."
+    )
+
+    await callback.message.edit_text(text=text, reply_markup=builder.as_markup(), parse_mode="HTML")
+    await callback.answer()
+
+
+# ==================== РЕЖИМ 1: ВСІМ УЧАСНИКАМ ====================
+
+@router.callback_query(F.data == "bc_mode_all")
+async def broadcast_all_prompt(callback: types.CallbackQuery, state: FSMContext):
     if not await is_admin(callback.from_user.id):
         await callback.answer("Немає доступу.", show_alert=True)
         return
 
     builder = InlineKeyboardBuilder()
-    builder.button(text="Скасувати", callback_data="controller_hub_new")
+    builder.button(text="Скасувати", callback_data="admin_write_participants")
 
     await callback.message.edit_text(
-        "📝 <b>Режим розсилки (Всім зареєстрованим)</b>\n\n"
-        "Надішліть повідомлення, яке хочете розіслати (це може бути текст, фото, відео або документ):",
+        "📢 <b>Режим розсилки: Всім зареєстрованим</b>\n\n"
+        "Надішліть повідомлення, яке хочете розіслати (текст, фото, відео або документ):",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
     await state.set_state(BroadcastAdmin.waiting_for_message)
-
-
-async def _run_broadcast(bot: Bot, message: types.Message, users: list, admin_id: int):
-    success_count = 0
-    for user in users:
-        try:
-            await message.send_copy(chat_id=user.telegram_id)
-            success_count += 1
-            await asyncio.sleep(0.05)  # Захист від лімітів спаму Telegram
-        except Exception:
-            pass
-
-    builder = InlineKeyboardBuilder()
-    builder.button(text="Повернутись в панель", callback_data="controller_hub_new")
-    try:
-        await bot.send_message(
-            chat_id=admin_id,
-            text=f"✅ <b>Розсилку завершено!</b>\nДоставлено: {success_count} з {len(users)}.",
-            reply_markup=builder.as_markup(),
-            parse_mode="HTML"
-        )
-    except Exception:
-        pass
+    await callback.answer()
 
 
 @router.message(BroadcastAdmin.waiting_for_message)
@@ -104,6 +122,214 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
 
     asyncio.create_task(_run_broadcast(message.bot, message, users, message.from_user.id))
     await state.clear()
+
+
+async def _run_broadcast(bot: Bot, message: types.Message, users: list, admin_id: int):
+    success_count = 0
+    fail_count = 0
+    for user in users:
+        try:
+            await message.send_copy(chat_id=user.telegram_id)
+            success_count += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            fail_count += 1
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Повернутись в панель", callback_data="controller_hub_new")
+    try:
+        await bot.send_message(
+            chat_id=admin_id,
+            text=(
+                f"✅ <b>Загальну розсилку завершено!</b>\n\n"
+                f"• Доставлено: <b>{success_count}</b>\n"
+                f"• Не доставлено: <b>{fail_count}</b>\n"
+                f"• Всього учасників: <b>{len(users)}</b>"
+            ),
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
+
+
+# ==================== РЕЖИМ 2: КОНКРЕТНИМ ЛЮДЯМ (@ТЕГ / ID) ====================
+
+@router.callback_query(F.data == "bc_mode_targeted")
+async def broadcast_targeted_prompt(callback: types.CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("Немає доступу.", show_alert=True)
+        return
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Скасувати", callback_data="admin_write_participants")
+
+    await callback.message.edit_text(
+        "🎯 <b>Розсилка конкретним людям</b>\n\n"
+        "Введіть список отримувачів через кому, пробіл або з нового рядка.\n"
+        "Можна вказувати <b>@username</b> або числовий <b>Telegram ID</b>.\n\n"
+        "<i>Приклад:</i>\n"
+        "<code>@ivan_ivanov, @petrenko, 123456789</code>",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+    await state.set_state(BroadcastAdmin.waiting_for_recipients)
+    await callback.answer()
+
+
+@router.message(BroadcastAdmin.waiting_for_recipients)
+async def process_recipients_input(message: types.Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    raw_text = message.text or ""
+    import re
+    tokens = [t.strip() for t in re.split(r"[\s,;]+", raw_text) if t.strip()]
+
+    if not tokens:
+        await message.answer("❌ Будь ласка, введіть хоча б один @тег або Telegram ID.")
+        return
+
+    found_users, not_found = await get_users_by_identifiers(tokens)
+
+    # Якщо введено ID, яких немає в базі, але це числа — дозволяємо пряме відправлення
+    extra_direct_ids = []
+    unresolved_tokens = []
+    for nf in not_found:
+        if nf.isdigit():
+            extra_direct_ids.append(int(nf))
+        else:
+            unresolved_tokens.append(nf)
+
+    target_user_ids = [u.telegram_id for u in found_users] + extra_direct_ids
+
+    if not target_user_ids:
+        builder = InlineKeyboardBuilder()
+        builder.button(text="Спробувати ще раз", callback_data="bc_mode_targeted")
+        builder.button(text="Скасувати", callback_data="admin_write_participants")
+        builder.adjust(1)
+
+        await message.answer(
+            "❌ <b>Жодного отримувача не знайдено в базі!</b>\n\n"
+            f"Перевірте введені дані: {', '.join(tokens)}",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+        return
+
+    await state.update_data(target_user_ids=target_user_ids)
+
+    lines = [f"🎯 <b>Знайдено отримувачів: {len(target_user_ids)}</b>\n"]
+    for u in found_users[:15]:
+        uname = f" ({u.username})" if u.username else ""
+        grp = f" [{u.group_name}]" if u.group_name else ""
+        lines.append(f"• <b>{u.name}</b>{uname}{grp}")
+    if len(found_users) > 15:
+        lines.append(f"<i>...та ще {len(found_users) - 15} осіб</i>")
+
+    for did in extra_direct_ids:
+        lines.append(f"• Прямий ID: <code>{did}</code> (не в базі)")
+
+    if unresolved_tokens:
+        lines.append(f"\n⚠️ <b>Не знайдено в базі ({len(unresolved_tokens)}):</b> {', '.join(unresolved_tokens)}")
+
+    lines.append("\n✏️ <b>Тепер надішліть повідомлення для розсилки</b> (текст, фото, відео тощо):")
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Скасувати", callback_data="admin_write_participants")
+
+    await message.answer("\n".join(lines), reply_markup=builder.as_markup(), parse_mode="HTML")
+    await state.set_state(BroadcastAdmin.waiting_for_targeted_msg)
+
+
+# ==================== РЕЖИМ 3: НЕ З ФІОТ ====================
+
+@router.callback_query(F.data == "bc_mode_non_fiot")
+async def broadcast_non_fiot_prompt(callback: types.CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("Немає доступу.", show_alert=True)
+        return
+
+    non_fiot_users = await get_non_fiot_users()
+    if not non_fiot_users:
+        await callback.answer("У базі немає користувачів не з ФІОТ 🎉", show_alert=True)
+        return
+
+    target_user_ids = [u.telegram_id for u in non_fiot_users]
+    await state.update_data(target_user_ids=target_user_ids)
+
+    lines = [f"👥 <b>Отримувачі не з ФІОТ: {len(non_fiot_users)} осіб</b>\n"]
+    for u in non_fiot_users[:15]:
+        uname = f" ({u.username})" if u.username else ""
+        grp = f" [група: {u.group_name}]" if u.group_name else ""
+        lines.append(f"• <b>{u.name}</b>{uname}{grp}")
+    if len(non_fiot_users) > 15:
+        lines.append(f"<i>...та ще {len(non_fiot_users) - 15} осіб</i>")
+
+    lines.append("\n✏️ <b>Надішліть повідомлення, яке отримають ці користувачі:</b>")
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Скасувати", callback_data="admin_write_participants")
+
+    await callback.message.edit_text("\n".join(lines), reply_markup=builder.as_markup(), parse_mode="HTML")
+    await state.set_state(BroadcastAdmin.waiting_for_targeted_msg)
+    await callback.answer()
+
+
+@router.message(BroadcastAdmin.waiting_for_targeted_msg)
+async def process_targeted_broadcast_message(message: types.Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    target_user_ids = data.get("target_user_ids", [])
+    if not target_user_ids:
+        await message.answer("❌ Список отримувачів порожній.")
+        await state.clear()
+        return
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Повернутись в панель", callback_data="controller_hub_new")
+    await message.answer(
+        f"⏳ <b>Розсилку запущено у фоні</b> для {len(target_user_ids)} вибраних отримувачів.\n"
+        f"Ти можеш користуватись ботом, звіт надійде після завершення.",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+
+    asyncio.create_task(_run_targeted_broadcast(message.bot, message, target_user_ids, message.from_user.id))
+    await state.clear()
+
+
+async def _run_targeted_broadcast(bot: Bot, message: types.Message, target_ids: list[int], admin_id: int):
+    success_count = 0
+    fail_count = 0
+    for uid in target_ids:
+        try:
+            await message.send_copy(chat_id=uid)
+            success_count += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            fail_count += 1
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Повернутись в панель", callback_data="controller_hub_new")
+    try:
+        await bot.send_message(
+            chat_id=admin_id,
+            text=(
+                f"✅ <b>Таргетовану розсилку завершено!</b>\n\n"
+                f"• Успішно доставлено: <b>{success_count}</b>\n"
+                f"• Не вдалося доставити: <b>{fail_count}</b> (можливо, користувач заблокував бота)\n"
+                f"• Всього отримувачів: <b>{len(target_ids)}</b>"
+            ),
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
 
 
 
