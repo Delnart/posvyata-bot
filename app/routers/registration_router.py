@@ -6,7 +6,7 @@ from aiogram.types import ReplyKeyboardRemove
 
 from app.data.bot_state import global_state
 from app.utils.google_sheets import add_user_to_sheet
-from app.db.db_requests import add_user, get_user
+from app.db.db_requests import add_user, get_user, is_user_blocked, block_user
 from app.utils.group_validator import validate_fiot_group
 import asyncio
 import logging
@@ -53,6 +53,19 @@ class RegisterForm(StatesGroup):
 async def start_registration(callback: types.CallbackQuery, state: FSMContext):
     if not global_state.get("registration_open", True):
         await callback.answer("На жаль, реєстрація вже закрита ❌", show_alert=True)
+        return
+
+    if await is_user_blocked(callback.from_user.id):
+        builder = InlineKeyboardBuilder()
+        builder.button(text="Головне меню", callback_data="controller_hub")
+        await callback.message.edit_text(
+            "❌ <b>Твій акаунт заблоковано для реєстрації на цей захід!</b>\n\n"
+            "Причина: спроба вказати академічну групу іншого факультету.\n\n"
+            "<i>Якщо сталася помилка і ти студент ФІОТ — звернись до організаторів для розблокування.</i>",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+        await callback.answer("Реєстрацію заблоковано", show_alert=True)
         return
 
     existing_user = await get_user(callback.from_user.id)
@@ -232,7 +245,41 @@ async def process_group(message: types.Message, state: FSMContext):
     except Exception:
         pass
 
-    is_valid, norm_group, err_text = validate_fiot_group(message.text)
+    is_valid, is_other_fac, norm_group, err_text = validate_fiot_group(message.text)
+    if is_other_fac:
+        # Автоматичне блокування за спробу реєстрації з іншого факультету
+        data = await state.get_data()
+        name = data.get("name")
+        username = data.get("tg_username") or (f"@{message.from_user.username}" if message.from_user.username else None)
+
+        await block_user(
+            tg_id=message.from_user.id,
+            username=username,
+            name=name,
+            attempted_group=norm_group,
+            reason=f"Вказано групу іншого факультету ({norm_group})"
+        )
+
+        builder = InlineKeyboardBuilder()
+        builder.button(text="Головне меню", callback_data="controller_hub")
+        main_msg_id = data.get("main_message_id")
+        if main_msg_id:
+            try:
+                await message.bot.edit_message_text(
+                    chat_id=message.chat.id,
+                    message_id=main_msg_id,
+                    text=err_text,
+                    reply_markup=builder.as_markup(),
+                    parse_mode="HTML"
+                )
+            except Exception:
+                await message.answer(err_text, reply_markup=builder.as_markup(), parse_mode="HTML")
+        else:
+            await message.answer(err_text, reply_markup=builder.as_markup(), parse_mode="HTML")
+
+        await state.clear()
+        return
+
     if not is_valid:
         err_msg = await message.answer(err_text, parse_mode="HTML")
         await state.update_data(error_msg_id=err_msg.message_id)

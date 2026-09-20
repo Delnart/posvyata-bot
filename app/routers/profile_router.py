@@ -2,7 +2,7 @@ from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from app.db.db_requests import get_user, update_user_field
+from app.db.db_requests import get_user, update_user_field, block_user
 from app.utils.google_sheets import update_user_in_sheet
 from app.utils.group_validator import validate_fiot_group
 
@@ -161,7 +161,26 @@ async def save_text_field(message: types.Message, state: FSMContext):
             input_text = f"@{input_text}"
 
     if field_to_update == "group_name":
-        is_valid, norm_group, err_text = validate_fiot_group(input_text)
+        is_valid, is_other_fac, norm_group, err_text = validate_fiot_group(input_text)
+        if is_other_fac:
+            user = await get_user(message.from_user.id)
+            name = user.name if user else None
+            username = user.username if user else (f"@{message.from_user.username}" if message.from_user.username else None)
+
+            await block_user(
+                tg_id=message.from_user.id,
+                username=username,
+                name=name,
+                attempted_group=norm_group,
+                reason=f"Зміна групи на чужий факультет ({norm_group})"
+            )
+
+            builder = InlineKeyboardBuilder()
+            builder.button(text="Головне меню", callback_data="controller_hub")
+            await message.answer(err_text, reply_markup=builder.as_markup(), parse_mode="HTML")
+            await state.clear()
+            return
+
         if not is_valid:
             err_msg = await message.answer(err_text, parse_mode="HTML")
             await state.update_data(error_msg_id=err_msg.message_id)

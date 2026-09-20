@@ -39,19 +39,19 @@ def normalize_group_name(raw_group: str) -> str:
     return cleaned.upper()
 
 
-def validate_fiot_group(raw_group: str) -> tuple[bool, str, str]:
+def validate_fiot_group(raw_group: str) -> tuple[bool, bool, str, str]:
     """
     Валідує групу на належність до ФІОТ згідно з номенклатурою КПІ.
 
     Повертає кортеж:
-    (is_valid: bool, normalized_group: str, error_message: str)
+    (is_valid: bool, is_other_faculty: bool, normalized_group: str, message: str)
     """
     if not raw_group:
-        return False, "", "❌ Будь ласка, введи шифр своєї групи."
+        return False, False, "", "❌ Будь ласка, введи шифр своєї групи."
 
     # Перевірка на наявність пробілів (правило 3: шифр групи не містить «пробілів»)
     if " " in raw_group.strip():
-        return False, "", (
+        return False, False, "", (
             "❌ <b>Шифр групи не повинен містити пробілів.</b>\n"
             "Приклад правильного запису: <b>ІП-55</b> або <b>ІС-41</b>"
         )
@@ -60,19 +60,20 @@ def validate_fiot_group(raw_group: str) -> tuple[bool, str, str]:
 
     # 1. Перевірка на відповідність правилам ФІОТ
     if FIOT_GROUP_PATTERN.match(norm):
-        return True, norm, ""
+        return True, False, norm, ""
 
     # 2. Якщо це валідний шифр КПІ, але іншого факультету (не починається з І)
     if KPI_GENERAL_PATTERN.match(norm):
-        return False, norm, (
-            "❌ <b>Реєстрація доступна тільки для студентів ФІОТ!</b>\n\n"
-            "Всі академічні групи нашого факультету починаються з літери <b>«І»</b> "
-            "(наприклад: <b>ІП-55</b>, <b>ІС-41</b>, <b>ІО-32</b>, <b>ІА-21</b>).\n\n"
-            "Якщо ти студент ФІОТ і сталася помилка — будь ласка, перевір введені дані."
+        return False, True, norm, (
+            f"❌ <b>Тобі відмовлено в участі у заході!</b>\n\n"
+            f"Посвята проводиться виключно для студентів факультету ФІОТ. "
+            f"Оскільки вказано академічну групу іншого факультету (<code>{norm}</code>), "
+            f"реєстрацію для тебе закрито, а профіль заблоковано.\n\n"
+            f"<i>Якщо ти студент ФІОТ і сталася помилка — звернись до організаторів для розблокування.</i>"
         )
 
     # 3. Якщо шифр взагалі не відповідає номенклатурі академічних груп
-    return False, norm, (
+    return False, False, norm, (
         "❌ <b>Некоректний формат групи.</b>\n\n"
         "Згідно з номенклатурою КПІ, шифр академічної групи складається з:\n"
         "• двох літер (для ФІОТ перша літера обов'язково <b>«І»</b>)\n"
